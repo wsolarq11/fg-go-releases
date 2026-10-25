@@ -1,0 +1,45 @@
+name: check mygo updates
+
+# 每天比对 mygo 上游最新版与产物仓状态文件 mygo-pinned.txt（当前 feed 构建所用版本）。
+# 落后即开 issue 通知升级；同标题 open issue 已存在则跳过（防重复）。
+# 版本源：goproxy.cn 的 @latest 端点（Go 模块代理官方语义，无需 Go 环境）。
+# 为什么放本仓：fg-go（私有）Actions 额度耗尽，公开仓 Actions 免费无限。
+
+on:
+  schedule:
+    - cron: "23 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: upstream latest
+        id: latest
+        run: echo "ver=$(curl -fsSL https://goproxy.cn/github.com/egoist/mygo/@latest | jq -r .Version)" >> "$GITHUB_OUTPUT"
+
+      - name: pinned (current feed's mygo)
+        id: pinned
+        run: echo "ver=$(curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/HEAD/mygo-pinned.txt | tr -d ' \n')" >> "$GITHUB_OUTPUT"
+
+      - name: summary
+        run: echo "upstream=${{ steps.latest.outputs.ver }} pinned=${{ steps.pinned.outputs.ver }}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: open issue when behind
+        if: steps.latest.outputs.ver != steps.pinned.outputs.ver
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LATEST: ${{ steps.latest.outputs.ver }}
+          PINNED: ${{ steps.pinned.outputs.ver }}
+        run: |
+          title="mygo ${LATEST} released (feed pinned: ${PINNED})"
+          dup=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title ${LATEST}" --json number --jq 'length')
+          if [ "$dup" -gt 0 ]; then echo "issue already open"; exit 0; fi
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body \
+            "mygo 上游已发布 ${LATEST}，当前 feed（0.0.1.x）构建所用为 ${PINNED}。
+
+          升级按 ADR-041 登记的四步：模块代理取 zip → diff 同步 tools/mygo → require+tidy → 门禁/发布/部署/compare=0。"
